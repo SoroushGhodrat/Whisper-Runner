@@ -4,6 +4,7 @@
 Windows: double-click to run. macOS and Linux: python3 WhisperRunner.pyw. MIT license.
 """
 
+import base64
 import codecs
 import ctypes
 import datetime as dt
@@ -11,12 +12,14 @@ import functools
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import platform
 import queue
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -25,6 +28,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 import urllib.request
 import wave
+import zlib
 from importlib import metadata
 from tkinter import filedialog, messagebox
 
@@ -41,6 +45,12 @@ IS_MAC = sys.platform == "darwin"
 if IS_WIN:
     import winreg
     from ctypes import wintypes
+
+    # Without its own app ID the taskbar groups the window under pythonw.exe and shows Python's icon.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WhisperRunner")
+    except Exception:
+        pass
 
     # Per-monitor DPI awareness has to be set before any window exists.
     try:
@@ -1987,6 +1997,63 @@ def style_titlebar(root):
         pass
 
 
+def _seg_dist(x, y, ax, ay, bx, by):
+    """Distance from (x, y) to the segment a-b."""
+    dx, dy = bx - ax, by - ay
+    t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(x - ax - t * dx, y - ay - t * dy)
+
+
+def icon_png(size):
+    """App icon as PNG bytes: a white microphone and lines of text on a blue-to-purple rounded square.
+    Shapes are distance fields, so edges come out anti-aliased at any size."""
+    c1 = [int(ACCENT[i:i + 2], 16) for i in (1, 3, 5)]
+    c2 = [int(PURPLE[i:i + 2], 16) for i in (1, 3, 5)]
+    aa = 1 / size  # one pixel in unit coordinates
+    lines = ((0.37, 0.80), (0.50, 0.86), (0.63, 0.74))  # text lines: y, right end
+    rows = bytearray()
+    for py in range(size):
+        rows.append(0)  # PNG filter type: none
+        y = (py + 0.5) / size
+        for qx in range(size):
+            x = (qx + 0.5) / size
+            # Rounded square background.
+            m, r = 0.04, 0.22
+            dx, dy = max(abs(x - 0.5) - (0.5 - m - r), 0), max(abs(y - 0.5) - (0.5 - m - r), 0)
+            bg = min(max((r - math.hypot(dx, dy)) / aa + 0.5, 0), 1)
+            if bg <= 0:
+                rows += b"\0\0\0\0"
+                continue
+            # Microphone: capsule, U-shaped holder, stem and base.
+            d = _seg_dist(x, y, 0.36, 0.25, 0.36, 0.47) - 0.105
+            if y > 0.47:
+                d = min(d, abs(math.hypot(x - 0.36, y - 0.47) - 0.175) - 0.024)
+            d = min(d, _seg_dist(x, y, 0.36, 0.645, 0.36, 0.76) - 0.024)
+            d = min(d, _seg_dist(x, y, 0.27, 0.77, 0.45, 0.77) - 0.028)
+            fg = min(max(-d / aa + 0.5, 0), 1)
+            # Transcribed text.
+            d = min(_seg_dist(x, y, 0.64, ly, rx, ly) for ly, rx in lines) - 0.03
+            fg = max(fg, 0.85 * min(max(-d / aa + 0.5, 0), 1))
+            t = (x + y) / 2
+            rows += bytes(round(a + (b - a) * t + (255 - a - (b - a) * t) * fg) for a, b in zip(c1, c2))
+            rows.append(round(255 * bg))
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows))) + chunk(b"IEND", b""))
+
+
+def set_icon(root):
+    """Use the app's own icon for the window and taskbar instead of Python's."""
+    try:
+        root.icons = [tk.PhotoImage(master=root, data=base64.b64encode(icon_png(s)))
+                      for s in (256, 64, 48, 32, 16)]
+        root.iconphoto(True, *root.icons)
+    except tk.TclError:
+        pass  # Tk older than 8.6 can't read PNG
+
+
 if IS_WIN:
     class MONITORINFO(ctypes.Structure):
         _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
@@ -2094,6 +2161,7 @@ def main():
             pass  # no build for this platform; the app works without drag-and-drop
     root.update_idletasks()
     set_dpi(root, window_dpi(root))
+    set_icon(root)
     app = App(root)
     fit_window(root, px(1180), px(820))
     root.update_idletasks()
