@@ -2,11 +2,13 @@
 
 A small desktop app that transcribes audio with [OpenAI Whisper](https://github.com/openai/whisper) and shows you what's happening while it works: live progress, time left, and the transcript appearing line by line.
 
-It's a single Python file. There's nothing to build: on Windows you double-click it.
+It's plain Python with nothing to build: on Windows you double-click it.
+
+![Whisper Runner transcribing a podcast: progress, time left, speed and the live transcript](docs/screenshot.png)
 
 ## Features
 
-- **Live progress.** Percentage, a progress bar, elapsed time, time left, when it will finish, and speed.
+- **Live progress.** Percentage, a progress bar, elapsed time, time left, when it will finish, speed, and how much CPU and memory Whisper is using.
 - **Live transcript.** Text appears as Whisper produces it. When it's done, the transcript is saved as a `.txt` file next to the audio and shown in the app, ready to copy.
 - **Picks a model for your computer.** The app checks your CPU, memory and graphics card, and suggests the Whisper model that fits. You can always choose another one.
 - **Checks what's installed.** The Requirements section compares your Python, Whisper, PyTorch and FFmpeg with the latest versions and gives you the exact command to install or update each one, for your operating system. Click a command to copy it.
@@ -28,7 +30,7 @@ Once the app is running, the **Requirements** section tells you if anything is m
 
 ## Installation
 
-Download [`WhisperRunner.pyw`](WhisperRunner.pyw), or clone the repository:
+Download the repository as a ZIP (**Code → Download ZIP** on GitHub) and unzip it, or clone it. Keep `WhisperRunner.pyw` and the `whisper_runner` folder next to each other: the `.pyw` file only starts the app in that folder.
 
 ```bash
 git clone https://github.com/SoroushGhodrat/Whisper-Runner.git
@@ -92,6 +94,12 @@ On Linux, the standard PyTorch install already supports NVIDIA graphics cards. O
 3. **Pick a language**, or leave it on **Auto** to let Whisper detect it from the first 30 seconds.
 4. Click **Start transcribing**.
 
+Click **Pause** to stop Whisper where it is, and **Resume** to carry on from the same point. The model stays loaded while paused, so keep the app open: closing it stops the run.
+
+The app's own interface is available in English, Norwegian (Bokmål), Swedish, Danish, German, Spanish, French, Polish and Ukrainian. Switch with the language button in the top-right corner of the window; the change applies right away, even during a run, and is remembered next time. On first start the app uses your system's language if it's one of these, and English otherwise. This only changes the app's text, not the language Whisper transcribes in.
+
+**About** shows which version you have and checks GitHub for a newer release. The app also checks by itself, at most once a day, and shows **Update available** at the top when there is one. It never downloads updates itself: About links to the project page, and **Skip this version** stops the reminder for that version.
+
 The transcript is saved as `<audio name>.txt` in the same folder as the audio file. Use **Copy** to copy it, or **Open folder** to see the file. The **Log** tab shows Whisper's own output, which helps if something goes wrong.
 
 Each model is downloaded once. The line under the model tabs tells you whether the selected model is installed. If it isn't, click **Download** next to it. The app never downloads anything on its own: if you start with a model that isn't installed, it tells you and waits for you to decide. While a model downloads, the progress bar turns purple and shows the size and speed, and **Cancel** stops it. The app checks there's enough disk space first, and verifies the file's checksum when it's done.
@@ -152,13 +160,32 @@ The app runs the Whisper command-line tool in the background:
 python -m whisper <file> --model <model> --output_format txt --output_dir <file's folder> [--language <code>]
 ```
 
-It reads Whisper's output as it comes. Each line has a timestamp, which the app divides by the audio length (from `ffprobe`) to work out the progress and the time left. Cancel stops Whisper and everything it started.
+It reads Whisper's output as it comes. Each line has a timestamp, which the app divides by the audio length (from `ffprobe`) to work out the progress and the time left. Cancel stops Whisper and everything it started. Pause freezes the Whisper process (on macOS and Linux, its process group) and Resume lets it continue, so the transcript is the same as an uninterrupted run.
 
 The interface is plain Tkinter, with rounded shapes drawn on canvases. On Windows the app adapts to each monitor's display scaling, including when you move the window between screens.
 
 ## Contributing
 
-Issues and pull requests are welcome. The app is deliberately one file with no build step and no required packages beyond Whisper. Please keep it that way, and keep it working on Windows, macOS and Linux.
+Issues and pull requests are welcome. The app deliberately has no build step and no required packages beyond Whisper. Please keep it that way, and keep it working on Windows, macOS and Linux.
+
+The code is in the `whisper_runner` package:
+
+| | |
+|---|---|
+| `main.py` | starts the app |
+| `app.py` | puts the panels together, keeps the state, runs Whisper and model downloads |
+| `ui/` | the panels: header, file picker, model and language selectors, run controls, progress, transcript, session panel, About |
+| `widgets/` | the drawn building blocks: buttons, tabs, cards, progress bar, dropdown, flags… |
+| `transcriber.py` | one Whisper run: the command, reading its output, pausing and stopping |
+| `requirements.py`, `system.py`, `updates.py` | the Requirements check, the hardware check, the check for a newer app release |
+| `i18n/` | interface languages; `messages.py` holds all text and translations |
+| `config.py`, `theme.py` | constants, colors, fonts and display scaling |
+| `models.py`, `platform_utils.py`, `util.py`, `window.py` | model downloads, OS specifics, helpers, window setup |
+| `settings.py`, `dnd.py` | saved choices, optional drag and drop |
+
+Each panel in `ui/` builds and owns its part of the window and has a few methods to update it, such as `progress.set_status(...)` or `transcript.add_segment(...)`. Its `state()` and `restore()` carry what it shows over when the window is rebuilt for another language or display scale.
+
+To add an interface language, add a column to `i18n/messages.py` and a line to `UI_LANGS` in `i18n/__init__.py`.
 
 ## License
 
