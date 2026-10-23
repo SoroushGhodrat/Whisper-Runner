@@ -848,6 +848,8 @@ class ScrollArea(tk.Frame):
     def _set(self, first, last):
         if float(last) - float(first) >= 1:
             self.sb.grid_remove()
+            if float(first) != 0:  # content fits: keep it pinned to the top
+                self.canvas.yview_moveto(0)
         else:
             self.sb.grid()
         self.sb.set(first, last)
@@ -855,6 +857,9 @@ class ScrollArea(tk.Frame):
     def wheel(self, e, units=None):
         """Scroll on a wheel event over this area. Windows sends steps of 120, macOS small steps,
         and Linux Button-4/5 events (passed with `units`)."""
+        first, last = self.canvas.yview()
+        if last - first >= 1:  # nothing to scroll; Tk would otherwise shift the content into empty space
+            return
         if units is None:
             units = -e.delta if IS_MAC else -3 * int(e.delta / 120)
         w = self.winfo_containing(e.x_root, e.y_root)
@@ -1417,7 +1422,7 @@ class App:
         self.file_name.config(text=os.path.basename(path))
         size = fmt_size(os.path.getsize(path))
         ext = os.path.splitext(path)[1].lower()
-        self.file_info.config(text=f"{size} \u00B7 {ext} \u00B7 reading length\u2026", fg=MUTED)
+        self.file_info.config(text=f"File size: {size} \u00B7 Duration: reading\u2026 \u00B7 Type: {ext}", fg=MUTED)
         self.go_btn.set_enabled(True)
         self.status.config(text="Ready", fg=TEXT)
         self.detail.config(text=os.path.dirname(path))
@@ -1433,8 +1438,8 @@ class App:
         if path != self.file:
             return
         self.duration = d
-        length = fmt_clock(d) if d else "length unknown"
-        self.file_info.config(text=f"{size} \u00B7 {length} \u00B7 {ext}")
+        length = fmt_clock(d) if d else "unknown"
+        self.file_info.config(text=f"File size: {size} \u00B7 Duration: {length} \u00B7 Type: {ext}")
 
     # ---- running Whisper
 
