@@ -4,6 +4,8 @@ A small desktop app that transcribes audio with [OpenAI Whisper](https://github.
 
 It's a single Python file. There's nothing to build: on Windows you double-click it.
 
+![Whisper Runner transcribing a podcast: progress, time left, speed and the live transcript](docs/screenshot.png)
+
 ## Features
 
 - **Live progress.** Percentage, a progress bar, elapsed time, time left, when it will finish, and speed.
