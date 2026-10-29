@@ -94,6 +94,8 @@ On Linux, the standard PyTorch install already supports NVIDIA graphics cards. O
 3. **Pick a language**, or leave it on **Auto** to let Whisper detect it from the first 30 seconds.
 4. Click **Start transcribing**.
 
+Click **Pause** to stop Whisper where it is, and **Resume** to carry on from the same point. The model stays loaded while paused, so keep the app open: closing it stops the run.
+
 The transcript is saved as `<audio name>.txt` in the same folder as the audio file. Use **Copy** to copy it, or **Open folder** to see the file. The **Log** tab shows Whisper's own output, which helps if something goes wrong.
 
 Each model is downloaded once. The line under the model tabs tells you whether the selected model is installed. If it isn't, click **Download** next to it. The app never downloads anything on its own: if you start with a model that isn't installed, it tells you and waits for you to decide. While a model downloads, the progress bar turns purple and shows the size and speed, and **Cancel** stops it. The app checks there's enough disk space first, and verifies the file's checksum when it's done.
@@ -154,7 +156,7 @@ The app runs the Whisper command-line tool in the background:
 python -m whisper <file> --model <model> --output_format txt --output_dir <file's folder> [--language <code>]
 ```
 
-It reads Whisper's output as it comes. Each line has a timestamp, which the app divides by the audio length (from `ffprobe`) to work out the progress and the time left. Cancel stops Whisper and everything it started.
+It reads Whisper's output as it comes. Each line has a timestamp, which the app divides by the audio length (from `ffprobe`) to work out the progress and the time left. Cancel stops Whisper and everything it started. Pause freezes the Whisper process (on macOS and Linux, its process group) and Resume lets it continue, so the transcript is the same as an uninterrupted run.
 
 The interface is plain Tkinter, with rounded shapes drawn on canvases. On Windows the app adapts to each monitor's display scaling, including when you move the window between screens.
 
