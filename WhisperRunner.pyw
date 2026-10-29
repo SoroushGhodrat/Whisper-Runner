@@ -319,6 +319,29 @@ def kill_tree(pid):
             pass
 
 
+def suspend_tree(pid, pause):
+    """Freeze (pause=True) or continue a process; on macOS/Linux its whole process group.
+    Returns False if the process couldn't be reached."""
+    if IS_WIN:
+        k32, ntdll = ctypes.WinDLL("kernel32"), ctypes.WinDLL("ntdll")
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        handle = k32.OpenProcess(0x0800, False, pid)  # PROCESS_SUSPEND_RESUME
+        if not handle:
+            return False
+        try:
+            call = ntdll.NtSuspendProcess if pause else ntdll.NtResumeProcess
+            call.argtypes = (wintypes.HANDLE,)
+            return call(handle) == 0
+        finally:
+            k32.CloseHandle(wintypes.HANDLE(handle))
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGSTOP if pause else signal.SIGCONT)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def reveal_file(path):
     """Show a file in the file manager."""
     if IS_WIN:
@@ -956,6 +979,7 @@ class App:
         self.proc = None
         self.running = False
         self.cancelled = False
+        self.paused_at = None  # time.time() when paused, else None
         self.start_time = 0.0
         self.end_time = 0.0
         self.processed = 0.0
@@ -1198,8 +1222,11 @@ class App:
         self.go_btn = Button(actions, "Start transcribing", self.start, height=40, padx=24)
         self.go_btn.grid(row=0, column=0)
         self.go_btn.set_enabled(False)
+        self.pause_btn = Button(actions, "Pause", self.toggle_pause, style="outline", width=110, height=40)
+        self.pause_btn.grid(row=0, column=1, padx=(px(10), 0))
+        self.pause_btn.set_enabled(False)
         self.cancel_btn = Button(actions, "Cancel", self.cancel, color=RED, style="outline", width=110, height=40)
-        self.cancel_btn.grid(row=0, column=1, padx=(px(10), 0))
+        self.cancel_btn.grid(row=0, column=2, padx=(px(10), 0))
         self.cancel_btn.set_enabled(False)
 
         prog = tk.Frame(p, bg=PANEL)
@@ -1474,7 +1501,7 @@ class App:
             self.detail.config(text=str(e))
             return
         self.out_path = os.path.join(folder, os.path.splitext(os.path.basename(self.file))[0] + ".txt")
-        self.running, self.cancelled = True, False
+        self.running, self.cancelled, self.paused_at = True, False, None
         self.start_time, self.processed = time.time(), 0.0
         self.transcript_empty = True
         self._write(self.transcript, "Waiting for the first words\u2026", "muted", replace=True)
@@ -1566,6 +1593,7 @@ class App:
     def _set_inputs(self, on):
         self.go_btn.set_enabled(on and bool(self.file))
         self.cancel_btn.set_enabled(not on)
+        self.pause_btn.set_enabled(not on and self.running)
         self.choose_btn.set_enabled(on)
         self.model_tabs.set_enabled(on)
         self.lang_tabs.set_enabled(on)
@@ -1601,7 +1629,8 @@ class App:
                 self.transcript_empty = False
             self._write(self.transcript, f"{fmt_clock(start)}  ", "ts")
             self._write(self.transcript, words + "\n")
-            self.status.config(text="Transcribing", fg=TEXT)
+            if not self.paused_at:  # lines already in the pipe still arrive after pausing
+                self.status.config(text="Transcribing", fg=TEXT)
             if self.duration:
                 p = min(self.processed / self.duration, 1.0)
                 self.percent.config(text=f"{int(p * 100)}%")
@@ -1633,7 +1662,7 @@ class App:
             self.root.after(500, self._tick)
 
     def _update_stats(self):
-        elapsed = time.time() - self.start_time
+        elapsed = (self.paused_at or time.time()) - self.start_time
         self.stats["elapsed"].config(text=fmt_clock(elapsed))
         if self.processed > 0 and elapsed > 0:
             self.stats["speed"].config(text=f"{self.processed / elapsed:.1f}\u00D7")
@@ -1642,9 +1671,13 @@ class App:
             left = elapsed * (1 - p) / p
             self.stats["left"].config(text=fmt_clock(left))
             finish = dt.datetime.now() + dt.timedelta(seconds=left)
-            self.stats["finish"].config(text=finish.strftime("%H:%M"))
+            self.stats["finish"].config(text="—" if self.paused_at else finish.strftime("%H:%M"))
 
     def on_exit(self, rc):
+        if self.paused_at:  # killed while paused: count the time up to the pause only
+            self.start_time += time.time() - self.paused_at
+            self.paused_at = None
+        self._set_pause_label("Pause")
         self._update_stats()
         self.running, self.proc = False, None
         self.bar.stop()
@@ -1688,6 +1721,38 @@ class App:
             self.cancelled = True
             self.status.config(text="Cancelling\u2026", fg=ORANGE)
             threading.Thread(target=kill_tree, args=(self.proc.pid,), daemon=True).start()
+
+    def toggle_pause(self):
+        """Freeze Whisper where it is, or let it continue. The model stays loaded while paused."""
+        if not (self.proc and self.running) or self.cancelled:
+            return
+        pause = not self.paused_at
+        if not suspend_tree(self.proc.pid, pause):
+            self.detail.config(text="Couldn't pause Whisper" if pause else "Couldn't resume Whisper")
+            return
+        if pause:
+            self.paused_at = time.time()
+            self.bar.stop()
+            self.bar.set(self.bar.value, ORANGE)
+            self.status.config(text="Paused", fg=ORANGE)
+            self.detail.config(text="Click Resume to continue where it stopped")
+            self._set_pause_label("Resume")
+        else:
+            self.start_time += time.time() - self.paused_at  # paused time doesn't count
+            self.paused_at = None
+            self.bar.set(self.bar.value, ACCENT)
+            if self.processed:
+                self.status.config(text="Transcribing", fg=TEXT)
+            else:
+                self.bar.start()
+                self.status.config(text="Loading model", fg=TEXT)
+            self.detail.config(text=f"{self.model_tabs.value} · {self.lang or 'auto-detect language'}")
+            self._set_pause_label("Pause")
+        self._update_stats()
+
+    def _set_pause_label(self, text):
+        self.pause_btn.text = text
+        self.pause_btn.draw()
 
     def copy_transcript(self):
         text = self.transcript.get("1.0", "end").strip()
