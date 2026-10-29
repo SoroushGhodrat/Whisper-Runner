@@ -78,6 +78,8 @@ PURPLE = "#8B6CF6"
 GREEN = "#3DD68C"
 ORANGE = "#F5A524"
 RED = "#F2546B"
+TEAL = "#2CC4D4"
+PINK = "#E86BA8"
 MUTED = "#8C90B5"
 TEXT = "#ECEDF7"
 
@@ -319,27 +321,110 @@ def kill_tree(pid):
             pass
 
 
+if IS_WIN:
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t)]
+
+    K32 = ctypes.WinDLL("kernel32")
+    K32.OpenProcess.restype = wintypes.HANDLE
+    K32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    K32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    K32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    K32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    K32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+                                            wintypes.DWORD)
+
+    def win_tree(pid):
+        """The process and everything it started. A venv's python.exe is only a launcher that
+        starts the real Python as a child, so the work happens one level down."""
+        snap = K32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            return [pid]
+        children = {}
+        try:
+            e = PROCESSENTRY32W()
+            e.dwSize = ctypes.sizeof(e)
+            ok = K32.Process32FirstW(snap, ctypes.byref(e))
+            while ok:
+                children.setdefault(e.th32ParentProcessID, []).append(e.th32ProcessID)
+                ok = K32.Process32NextW(snap, ctypes.byref(e))
+        finally:
+            K32.CloseHandle(snap)
+        tree, todo = [], [pid]
+        while todo:
+            p = todo.pop()
+            if p not in tree:
+                tree.append(p)
+                todo += children.get(p, [])
+        return tree
+
+
 def suspend_tree(pid, pause):
-    """Freeze (pause=True) or continue a process; on macOS/Linux its whole process group.
+    """Freeze (pause=True) or continue a process and everything it started.
     Returns False if the process couldn't be reached."""
     if IS_WIN:
-        k32, ntdll = ctypes.WinDLL("kernel32"), ctypes.WinDLL("ntdll")
-        k32.OpenProcess.restype = wintypes.HANDLE
-        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        handle = k32.OpenProcess(0x0800, False, pid)  # PROCESS_SUSPEND_RESUME
-        if not handle:
-            return False
-        try:
-            call = ntdll.NtSuspendProcess if pause else ntdll.NtResumeProcess
-            call.argtypes = (wintypes.HANDLE,)
-            return call(handle) == 0
-        finally:
-            k32.CloseHandle(wintypes.HANDLE(handle))
+        ntdll = ctypes.WinDLL("ntdll")
+        call = ntdll.NtSuspendProcess if pause else ntdll.NtResumeProcess
+        call.argtypes = (wintypes.HANDLE,)
+        done = False
+        for p in win_tree(pid):
+            handle = K32.OpenProcess(0x0800, False, p)  # PROCESS_SUSPEND_RESUME
+            if handle:
+                done = call(handle) == 0 or done
+                K32.CloseHandle(handle)
+        return done
     try:
         os.killpg(os.getpgid(pid), signal.SIGSTOP if pause else signal.SIGCONT)
         return True
     except (ProcessLookupError, PermissionError):
         return False
+
+
+def process_usage(pid):
+    """(CPU seconds used so far, memory in use in bytes) for a process and what it started,
+    or None if it can't be read."""
+    try:
+        if IS_WIN:
+            cpu = mem = 0
+            found = False
+            for p in win_tree(pid):
+                handle = K32.OpenProcess(0x1000, False, p)  # PROCESS_QUERY_LIMITED_INFORMATION
+                if not handle:
+                    continue
+                times = [wintypes.FILETIME() for _ in range(4)]
+                counters = PROCESS_MEMORY_COUNTERS()
+                counters.cb = ctypes.sizeof(counters)
+                if (K32.GetProcessTimes(handle, *map(ctypes.byref, times))
+                        and K32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)):
+                    cpu += sum(t.dwHighDateTime << 32 | t.dwLowDateTime for t in times[2:]) / 1e7
+                    mem += counters.WorkingSetSize
+                    found = True
+                K32.CloseHandle(handle)
+            return (cpu, mem) if found else None
+        if IS_MAC:
+            # TIME is [[dd-]hh:]mm:ss.ss, RSS is in KB
+            used, rss = run_quiet(["ps", "-o", "time=,rss=", "-p", str(pid)]).split()
+            days, _, clock = used.rpartition("-")
+            secs = sum(float(x) * 60 ** i for i, x in enumerate(reversed(clock.split(":"))))
+            return secs + int(days or 0) * 86400, int(rss) * 1024
+        with open(f"/proc/{pid}/stat", encoding="ascii") as f:
+            fields = f.read().rsplit(")", 1)[1].split()  # fields after the process name
+        cpu = (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")  # utime + stime
+        return cpu, int(fields[21]) * os.sysconf("SC_PAGE_SIZE")  # rss in pages
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def reveal_file(path):
@@ -980,6 +1065,7 @@ class App:
         self.running = False
         self.cancelled = False
         self.paused_at = None  # time.time() when paused, else None
+        self.usage = None  # (time.monotonic(), CPU seconds) at the last CPU sample
         self.start_time = 0.0
         self.end_time = 0.0
         self.processed = 0.0
@@ -1300,7 +1386,9 @@ class App:
         items = [("elapsed", "Elapsed", ACCENT, "since start"),
                  ("left", "Time left", PURPLE, "estimate"),
                  ("finish", "Finishes at", GREEN, "local time"),
-                 ("speed", "Speed", ORANGE, "audio time per second")]
+                 ("speed", "Speed", ORANGE, "audio time per second"),
+                 ("cpu", "CPU use", TEAL, "Whisper, of the whole CPU"),
+                 ("ram", "Memory use", PINK, f"Whisper, of {ram_gb()} GB" if ram_gb() else "Whisper")]
         for i, (key, title, color, sub) in enumerate(items):
             c = Card(stats, CARD, radius=14, pad=14)
             c.grid(row=i // 2, column=i % 2, sticky="nsew",
@@ -1503,6 +1591,7 @@ class App:
         self.out_path = os.path.join(folder, os.path.splitext(os.path.basename(self.file))[0] + ".txt")
         self.running, self.cancelled, self.paused_at = True, False, None
         self.start_time, self.processed = time.time(), 0.0
+        self.usage = None
         self.transcript_empty = True
         self._write(self.transcript, "Waiting for the first words\u2026", "muted", replace=True)
         for key in self.stats:
@@ -1659,7 +1748,24 @@ class App:
     def _tick(self):
         if self.running:
             self._update_stats()
+            self._update_usage()
             self.root.after(500, self._tick)
+
+    def _update_usage(self):
+        """CPU and memory used by Whisper. CPU is the share of the whole processor since the last
+        sample, like Task Manager shows it."""
+        u = process_usage(self.proc.pid) if self.proc else None
+        if not u:
+            return
+        now = time.monotonic()
+        if self.usage:
+            t0, cpu0 = self.usage
+            if now - t0 < 0.9:
+                return
+            pct = (u[0] - cpu0) / (now - t0) / (os.cpu_count() or 1) * 100
+            self.stats["cpu"].config(text=f"{max(0, min(pct, 100)):.0f}%")
+        self.stats["ram"].config(text=fmt_size(u[1]))
+        self.usage = (now, u[0])
 
     def _update_stats(self):
         elapsed = (self.paused_at or time.time()) - self.start_time
@@ -1679,6 +1785,8 @@ class App:
             self.paused_at = None
         self._set_pause_label("Pause")
         self._update_stats()
+        self.stats["cpu"].config(text="—")
+        self.stats["ram"].config(text="—")
         self.running, self.proc = False, None
         self.bar.stop()
         self._update_model_status()  # the run may have downloaded the model

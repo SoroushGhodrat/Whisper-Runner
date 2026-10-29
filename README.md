@@ -8,7 +8,7 @@ It's a single Python file. There's nothing to build: on Windows you double-click
 
 ## Features
 
-- **Live progress.** Percentage, a progress bar, elapsed time, time left, when it will finish, and speed.
+- **Live progress.** Percentage, a progress bar, elapsed time, time left, when it will finish, speed, and how much CPU and memory Whisper is using.
 - **Live transcript.** Text appears as Whisper produces it. When it's done, the transcript is saved as a `.txt` file next to the audio and shown in the app, ready to copy.
 - **Picks a model for your computer.** The app checks your CPU, memory and graphics card, and suggests the Whisper model that fits. You can always choose another one.
 - **Checks what's installed.** The Requirements section compares your Python, Whisper, PyTorch and FFmpeg with the latest versions and gives you the exact command to install or update each one, for your operating system. Click a command to copy it.
