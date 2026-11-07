@@ -2,7 +2,7 @@
 
 A small desktop app that transcribes audio with [OpenAI Whisper](https://github.com/openai/whisper) and shows you what's happening while it works: live progress, time left, and the transcript appearing line by line.
 
-It's a single Python file. There's nothing to build: on Windows you double-click it.
+It's plain Python with nothing to build: on Windows you double-click it.
 
 ![Whisper Runner transcribing a podcast: progress, time left, speed and the live transcript](docs/screenshot.png)
 
@@ -30,7 +30,7 @@ Once the app is running, the **Requirements** section tells you if anything is m
 
 ## Installation
 
-Download [`WhisperRunner.pyw`](WhisperRunner.pyw), or clone the repository:
+Download the repository as a ZIP (**Code → Download ZIP** on GitHub) and unzip it, or clone it. Keep `WhisperRunner.pyw` and the `whisper_runner` folder next to each other: the `.pyw` file only starts the app in that folder.
 
 ```bash
 git clone https://github.com/SoroushGhodrat/Whisper-Runner.git
@@ -95,6 +95,10 @@ On Linux, the standard PyTorch install already supports NVIDIA graphics cards. O
 4. Click **Start transcribing**.
 
 Click **Pause** to stop Whisper where it is, and **Resume** to carry on from the same point. The model stays loaded while paused, so keep the app open: closing it stops the run.
+
+The app's own interface is available in English, Norwegian (Bokmål), Swedish, Danish, German, Spanish, French, Polish and Ukrainian. Switch with the language button in the top-right corner of the window; the change applies right away, even during a run, and is remembered next time. On first start the app uses your system's language if it's one of these, and English otherwise. This only changes the app's text, not the language Whisper transcribes in.
+
+**About** shows which version you have and checks GitHub for a newer release. The app also checks by itself, at most once a day, and shows **Update available** at the top when there is one. It never downloads updates itself: About links to the project page, and **Skip this version** stops the reminder for that version.
 
 The transcript is saved as `<audio name>.txt` in the same folder as the audio file. Use **Copy** to copy it, or **Open folder** to see the file. The **Log** tab shows Whisper's own output, which helps if something goes wrong.
 
@@ -162,7 +166,26 @@ The interface is plain Tkinter, with rounded shapes drawn on canvases. On Window
 
 ## Contributing
 
-Issues and pull requests are welcome. The app is deliberately one file with no build step and no required packages beyond Whisper. Please keep it that way, and keep it working on Windows, macOS and Linux.
+Issues and pull requests are welcome. The app deliberately has no build step and no required packages beyond Whisper. Please keep it that way, and keep it working on Windows, macOS and Linux.
+
+The code is in the `whisper_runner` package:
+
+| | |
+|---|---|
+| `main.py` | starts the app |
+| `app.py` | puts the panels together, keeps the state, runs Whisper and model downloads |
+| `ui/` | the panels: header, file picker, model and language selectors, run controls, progress, transcript, session panel, About |
+| `widgets/` | the drawn building blocks: buttons, tabs, cards, progress bar, dropdown, flags… |
+| `transcriber.py` | one Whisper run: the command, reading its output, pausing and stopping |
+| `requirements.py`, `system.py`, `updates.py` | the Requirements check, the hardware check, the check for a newer app release |
+| `i18n/` | interface languages; `messages.py` holds all text and translations |
+| `config.py`, `theme.py` | constants, colors, fonts and display scaling |
+| `models.py`, `platform_utils.py`, `util.py`, `window.py` | model downloads, OS specifics, helpers, window setup |
+| `settings.py`, `dnd.py` | saved choices, optional drag and drop |
+
+Each panel in `ui/` builds and owns its part of the window and has a few methods to update it, such as `progress.set_status(...)` or `transcript.add_segment(...)`. Its `state()` and `restore()` carry what it shows over when the window is rebuilt for another language or display scale.
+
+To add an interface language, add a column to `i18n/messages.py` and a line to `UI_LANGS` in `i18n/__init__.py`.
 
 ## License
 
